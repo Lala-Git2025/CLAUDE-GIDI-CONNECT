@@ -25,7 +25,7 @@ export const HeroSection = () => {
             </span>
           </h1>
           
-          <p className="text-xl md:text-2xl text-muted-foreground mb-8 leading-relaxed">
+          <p className="text-xl md:text-2xl text-foreground mb-8 leading-relaxed font-medium drop-shadow-lg">
             Experience Lagos after dark! Connect with the city's vibrant nightlife, 
             discover exclusive parties, and join the most energetic community in West Africa.
           </p>
