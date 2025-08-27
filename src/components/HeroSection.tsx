@@ -1,5 +1,6 @@
 import { Button } from "@/components/ui/button";
 import { MapPin, Users, Zap } from "lucide-react";
+import { Link } from "react-router-dom";
 import lagosHero from "@/assets/lagos-hero.jpg";
 
 export const HeroSection = () => {
@@ -48,12 +49,16 @@ export const HeroSection = () => {
           
           {/* CTA Buttons */}
           <div className="flex flex-col sm:flex-row gap-4 justify-center">
-            <Button variant="hero" size="lg">
-              Join the Night
-            </Button>
-            <Button variant="secondary" size="lg">
-              Discover Events
-            </Button>
+            <Link to="/get-started">
+              <Button variant="hero" size="lg">
+                Join the Night
+              </Button>
+            </Link>
+            <Link to="/events">
+              <Button variant="secondary" size="lg">
+                Discover Events
+              </Button>
+            </Link>
           </div>
         </div>
       </div>
