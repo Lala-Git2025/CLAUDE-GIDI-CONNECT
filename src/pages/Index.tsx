@@ -3,6 +3,8 @@ import { HeroSection } from "@/components/HeroSection";
 import { SearchSection } from "@/components/SearchSection";
 import { CategoryGrid } from "@/components/CategoryGrid";
 import { RecommendationSection } from "@/components/RecommendationSection";
+import { LiveNewsSection } from "@/components/LiveNewsSection";
+import { LiveVenueSection } from "@/components/LiveVenueSection";
 import { PopularDestinations } from "@/components/PopularDestinations";
 import { FeaturesSection } from "@/components/FeaturesSection";
 import { BottomNavigation } from "@/components/BottomNavigation";
@@ -15,6 +17,8 @@ const Index = () => {
         <HeroSection />
         <SearchSection />
         <CategoryGrid />
+        <LiveNewsSection />
+        <LiveVenueSection />
         <RecommendationSection />
         <PopularDestinations />
         <FeaturesSection />
