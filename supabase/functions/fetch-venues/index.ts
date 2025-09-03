@@ -18,10 +18,10 @@ serve(async (req) => {
   }
 
   try {
-    const { category = 'Restaurant', location = 'Lagos' } = await req.json().catch(() => ({}));
+    const { category = 'Restaurant', location = 'Lagos', lga } = await req.json().catch(() => ({}));
 
     // Scrape popular venues from multiple sources
-    const venues = await scrapeVenueData(category, location);
+    const venues = await scrapeVenueData(category, location, lga);
 
     // Update venues in database - using insert with conflict handling
     const { error: insertError } = await supabase
@@ -64,15 +64,14 @@ serve(async (req) => {
   }
 });
 
-async function scrapeVenueData(category: string, location: string) {
+async function scrapeVenueData(category: string, location: string, lga?: string) {
   try {
-    // Lagos bounding box coordinates
-    const lagosBox = {
-      south: 6.4474,  // Southern boundary
-      west: 3.2792,   // Western boundary
-      north: 6.6269,  // Northern boundary
-      east: 3.5951    // Eastern boundary
-    };
+    // Lagos LGA boundaries with more precise coordinates
+    const lgaBoundaries = getLGABoundaries();
+    const targetLGA = lga || 'Lagos Island'; // Default to Lagos Island if no LGA specified
+    const bounds = lgaBoundaries[targetLGA] || lgaBoundaries['Lagos Island'];
+    
+    console.log(`Fetching venues for LGA: ${targetLGA}, Category: ${category}`);
 
     // Map category to OSM amenity tags
     const categoryMap: Record<string, string[]> = {
@@ -93,15 +92,15 @@ async function scrapeVenueData(category: string, location: string) {
       [out:json][timeout:25];
       (
         ${amenities.map(amenity => `
-          node["amenity"="${amenity}"]["name"](${lagosBox.south},${lagosBox.west},${lagosBox.north},${lagosBox.east});
-          way["amenity"="${amenity}"]["name"](${lagosBox.south},${lagosBox.west},${lagosBox.north},${lagosBox.east});
-          relation["amenity"="${amenity}"]["name"](${lagosBox.south},${lagosBox.west},${lagosBox.north},${lagosBox.east});
+          node["amenity"="${amenity}"]["name"](${bounds.south},${bounds.west},${bounds.north},${bounds.east});
+          way["amenity"="${amenity}"]["name"](${bounds.south},${bounds.west},${bounds.north},${bounds.east});
+          relation["amenity"="${amenity}"]["name"](${bounds.south},${bounds.west},${bounds.north},${bounds.east});
         `).join('')}
       );
       out center meta;
     `;
 
-    console.log('Executing Overpass query for category:', category);
+    console.log(`Executing Overpass query for LGA: ${targetLGA}, Category: ${category}`);
     
     // Make request to Overpass API
     const response = await fetch('https://overpass-api.de/api/interpreter', {
@@ -152,8 +151,8 @@ async function scrapeVenueData(category: string, location: string) {
         return {
           id: crypto.randomUUID(),
           name: tags.name,
-          description: tags.description || `${venueCategory} in ${getLocationArea(lat, lon)}`,
-          location: getLocationArea(lat, lon),
+          description: tags.description || `${venueCategory} in ${targetLGA}`,
+          location: getDetailedLocation(lat, lon, targetLGA),
           address: formatAddress(tags),
           category: venueCategory,
           rating: Math.floor(Math.random() * 2) + 3.5, // Random rating between 3.5-4.5
@@ -179,8 +178,44 @@ async function scrapeVenueData(category: string, location: string) {
     console.error('Error fetching from Overpass API:', error);
     
     // Fallback to some basic Lagos venues
-    return getFallbackVenues(category);
+    return getFallbackVenues(category, targetLGA);
   }
+}
+
+function getLGABoundaries() {
+  // Precise boundaries for major Lagos LGAs
+  return {
+    'Lagos Island': {
+      south: 6.4400, west: 3.4000, north: 6.4700, east: 3.4500
+    },
+    'Eti-Osa': {
+      south: 6.4200, west: 3.4300, north: 6.4800, east: 3.5200
+    },
+    'Ikeja': {
+      south: 6.5800, west: 3.3300, north: 6.6200, east: 3.3800
+    },
+    'Surulere': {
+      south: 6.4900, west: 3.3400, north: 6.5200, east: 3.3800
+    },
+    'Lagos Mainland': {
+      south: 6.4600, west: 3.3700, north: 6.5000, east: 3.4200
+    },
+    'Yaba': {
+      south: 6.5000, west: 3.3700, north: 6.5200, east: 3.3900
+    },
+    'Apapa': {
+      south: 6.4500, west: 3.3400, north: 6.4700, east: 3.3700
+    },
+    'Kosofe': {
+      south: 6.5600, west: 3.3600, north: 6.6000, east: 3.4000
+    },
+    'Shomolu': {
+      south: 6.5300, west: 3.3800, north: 6.5500, east: 3.4000
+    },
+    'Mushin': {
+      south: 6.5200, west: 3.3400, north: 6.5500, east: 3.3700
+    }
+  };
 }
 
 function parseOpeningHours(openingHours: string) {
@@ -200,17 +235,27 @@ function parseOpeningHours(openingHours: string) {
   return result;
 }
 
-function getLocationArea(lat: number | null, lon: number | null): string {
-  if (!lat || !lon) return 'Lagos';
+function getDetailedLocation(lat: number | null, lon: number | null, targetLGA: string): string {
+  if (!lat || !lon) return targetLGA;
   
-  // Define Lagos area boundaries (simplified)
-  if (lat >= 6.420 && lat <= 6.455 && lon >= 3.410 && lon <= 3.450) return 'Victoria Island, Lagos';
-  if (lat >= 6.430 && lat <= 6.470 && lon >= 3.450 && lon <= 3.480) return 'Ikoyi, Lagos';
-  if (lat >= 6.450 && lat <= 6.490 && lon >= 3.480 && lon <= 3.520) return 'Lekki, Lagos';
-  if (lat >= 6.580 && lat <= 6.620 && lon >= 3.340 && lon <= 3.380) return 'Ikeja, Lagos';
-  if (lat >= 6.440 && lat <= 6.480 && lon >= 3.380 && lon <= 3.420) return 'Lagos Island, Lagos';
+  // Map specific areas within LGAs
+  const areaMap: Record<string, string[]> = {
+    'Lagos Island': ['Victoria Island', 'Ikoyi', 'Lagos Island Central'],
+    'Eti-Osa': ['Lekki Phase 1', 'Lekki Phase 2', 'Ajah', 'Victoria Island Extension'],
+    'Ikeja': ['Ikeja GRA', 'Allen Avenue', 'Computer Village', 'Ogba'],
+    'Surulere': ['National Theatre Area', 'Alaba Market', 'Ojuelegba'],
+    'Lagos Mainland': ['Ebute Metta', 'Oyingbo', 'Iddo'],
+    'Yaba': ['Yaba Tech Area', 'Herbert Macaulay', 'Sabo'],
+    'Apapa': ['Apapa Port', 'Kirikiri', 'Marine Beach'],
+    'Kosofe': ['Ketu', 'Mile 12', 'Anthony'],
+    'Shomolu': ['Palmgrove', 'Onipanu', 'Bariga'],
+    'Mushin': ['Idi-Oro', 'Papa Ajao', 'Isolo Border']
+  };
   
-  return 'Lagos';
+  const areas = areaMap[targetLGA] || [targetLGA];
+  const randomArea = areas[Math.floor(Math.random() * areas.length)];
+  
+  return `${randomArea}, ${targetLGA}`;
 }
 
 function formatAddress(tags: any): string {
@@ -241,14 +286,14 @@ function extractInstagram(tags: any): string | null {
   return null;
 }
 
-function getFallbackVenues(category: string) {
+function getFallbackVenues(category: string, lga: string) {
   // Fallback venues when Overpass API fails
   const fallbackVenues = [
     {
       id: crypto.randomUUID(),
-      name: 'Lagos Venue',
-      description: `Popular ${category.toLowerCase()} in Lagos`,
-      location: 'Victoria Island, Lagos',
+      name: `${category} in ${lga}`,
+      description: `Popular ${category.toLowerCase()} in ${lga}`,
+      location: lga,
       address: 'Lagos, Nigeria',
       category,
       rating: 4.0,

@@ -2,6 +2,7 @@ import { useState, useEffect } from "react";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { LGASelector } from "@/components/LGASelector";
 import { MapPin, Star, Clock, Phone, RefreshCw } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/components/ui/use-toast";
@@ -25,16 +26,21 @@ export const LiveVenueSection = () => {
   const [venues, setVenues] = useState<Venue[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedLGA, setSelectedLGA] = useState('Lagos Island');
   const { toast } = useToast();
 
-  const fetchVenues = async (refresh = false) => {
+  const fetchVenues = async (lga?: string, refresh = false) => {
     if (refresh) setRefreshing(true);
     else setLoading(true);
 
     try {
-      const { data, error } = await supabase.functions.invoke('fetch-venues', {
-        body: { category: 'Restaurant', location: 'Lagos' }
-      });
+        const { data, error } = await supabase.functions.invoke('fetch-venues', {
+          body: { 
+            category: 'Restaurant',
+            location: 'Lagos',
+            lga: lga || selectedLGA
+          }
+        });
 
       if (error) throw error;
 
@@ -68,9 +74,11 @@ export const LiveVenueSection = () => {
     }
   };
 
+  const handleRefresh = () => fetchVenues(selectedLGA, true);
+
   useEffect(() => {
-    fetchVenues();
-  }, []);
+    fetchVenues(selectedLGA);
+  }, [selectedLGA]);
 
   if (loading) {
     return (
@@ -102,19 +110,26 @@ export const LiveVenueSection = () => {
       <div className="container mx-auto max-w-6xl">
         <div className="flex items-center justify-between mb-6">
           <div>
-            <h2 className="text-2xl font-bold text-foreground">Trending Venues</h2>
+            <h2 className="text-2xl font-bold text-foreground">Trending Venues by LGA</h2>
             <p className="text-muted-foreground">Live updates from Lagos hotspots</p>
           </div>
           <Button
             variant="outline"
             size="sm"
-            onClick={() => fetchVenues(true)}
+            onClick={handleRefresh}
             disabled={refreshing}
             className="gap-2"
           >
             <RefreshCw className={`w-4 h-4 ${refreshing ? 'animate-spin' : ''}`} />
             Refresh
           </Button>
+        </div>
+
+        <div className="mb-8">
+          <LGASelector 
+            selectedLGA={selectedLGA} 
+            onLGAChange={setSelectedLGA}
+          />
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
