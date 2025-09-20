@@ -13,12 +13,17 @@ const supabase = createClient(
 );
 
 serve(async (req) => {
+  console.log('🚀 Fetch-venues function called');
+  
   if (req.method === 'OPTIONS') {
     return new Response(null, { headers: corsHeaders });
   }
 
   try {
-    const { category = 'Restaurant', location = 'Lagos', lga } = await req.json().catch(() => ({}));
+    const requestBody = await req.json().catch(() => ({}));
+    const { category = 'Restaurant', location = 'Lagos', lga } = requestBody;
+    
+    console.log(`📋 Request params - Category: ${category}, Location: ${location}, LGA: ${lga}`);
 
     // Scrape popular venues from multiple sources
     const venues = await scrapeVenueData(category, location, lga);
@@ -66,6 +71,13 @@ serve(async (req) => {
 
 async function scrapeVenueData(category: string, location: string, lga?: string) {
   try {
+    console.log(`🔍 Scraping venue data - Category: ${category}, Location: ${location}, LGA: ${lga}`);
+    
+    // Test environment variable access
+    console.log(`🔑 Environment check:`);
+    console.log(`- GOOGLE_API_KEY exists: ${!!Deno.env.get('GOOGLE_API_KEY')}`);
+    console.log(`- GOOGLE_SEARCH_ENGINE_ID exists: ${!!Deno.env.get('GOOGLE_SEARCH_ENGINE_ID')}`);
+    
     // Lagos LGA boundaries with more precise coordinates
     const lgaBoundaries = getLGABoundaries();
     const targetLGA = lga || 'Lagos Island'; // Default to Lagos Island if no LGA specified
@@ -296,12 +308,20 @@ async function getVenueImages(venueName: string, category: string, location: str
     const googleApiKey = Deno.env.get('GOOGLE_API_KEY');
     const searchEngineId = Deno.env.get('GOOGLE_SEARCH_ENGINE_ID');
     
-    console.log(`Starting image search for: ${venueName}`);
+    console.log(`=== Starting image search for: ${venueName} ===`);
+    console.log(`Google API Key exists: ${!!googleApiKey}`);
+    console.log(`Search Engine ID exists: ${!!searchEngineId}`);
     
-    if (!googleApiKey || !searchEngineId) {
-      console.log('Google API credentials not found, trying web search fallback');
-      return await searchVenueImagesWeb(venueName, category, location);
+    if (googleApiKey) console.log(`API Key starts with: ${googleApiKey.substring(0, 10)}...`);
+    if (searchEngineId) console.log(`Search Engine ID: ${searchEngineId}`);
+    
+    if (!googleApiKey || !searchEngineId || googleApiKey.length < 10) {
+      console.log('❌ Google API credentials missing or invalid, using enhanced fallback');
+      // Create unique images for each venue to avoid duplicates
+      return getEnhancedFallbackImages(category, venueName + location);
     }
+
+    console.log('✅ Google API credentials found, proceeding with search');
 
     // Strategy 1: Search for specific venue name
     let images = await googleImageSearch(googleApiKey, searchEngineId, `"${venueName}" Lagos Nigeria`);
@@ -485,15 +505,25 @@ function getEnhancedFallbackImages(category: string, venueName?: string): string
   
   const categoryImages = allFallbackImages[category] || allFallbackImages['Restaurant'];
   
-  // Use venue name to consistently select the same images for each venue
+  // Use venue name and location to create a unique selection for each venue
   if (venueName) {
-    const hash = venueName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const hash = (venueName + category + (location || '')).split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
     const startIndex = hash % categoryImages.length;
-    return [categoryImages[startIndex]];
+    
+    // Select 1-3 different images for variety
+    const selectedImages = [];
+    for (let i = 0; i < Math.min(3, categoryImages.length); i++) {
+      const index = (startIndex + i) % categoryImages.length;
+      selectedImages.push(categoryImages[index]);
+    }
+    
+    console.log(`Selected ${selectedImages.length} fallback images for ${venueName}`);
+    return selectedImages;
   }
   
-  // Return a random image if no venue name
-  return [categoryImages[Math.floor(Math.random() * categoryImages.length)]];
+  // Return 3 random images if no venue name
+  const shuffled = [...categoryImages].sort(() => 0.5 - Math.random());
+  return shuffled.slice(0, 3);
 }
 
 // Legacy function for compatibility
