@@ -296,83 +296,209 @@ async function getVenueImages(venueName: string, category: string, location: str
     const googleApiKey = Deno.env.get('GOOGLE_API_KEY');
     const searchEngineId = Deno.env.get('GOOGLE_SEARCH_ENGINE_ID');
     
+    console.log(`Starting image search for: ${venueName}`);
+    
     if (!googleApiKey || !searchEngineId) {
-      console.log('Google API credentials not found, using fallback images');
-      return getFallbackImages(category);
+      console.log('Google API credentials not found, trying web search fallback');
+      return await searchVenueImagesWeb(venueName, category, location);
     }
 
-    // Create targeted search query for venue images
-    const searchQuery = `${venueName} ${category} ${location} Lagos Nigeria interior exterior`;
-    
-    console.log(`Searching for images: ${searchQuery}`);
-    
-    // Use Google Custom Search API for image search
-    const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${googleApiKey}&cx=${searchEngineId}&q=${encodeURIComponent(searchQuery)}&searchType=image&num=3&imgSize=large&safe=active`;
-    
-    const searchResponse = await fetch(searchUrl);
-
-    if (!searchResponse.ok) {
-      console.log(`Google image search failed for ${venueName} (${searchResponse.status}), using fallback`);
-      return getFallbackImages(category);
+    // Strategy 1: Search for specific venue name
+    let images = await googleImageSearch(googleApiKey, searchEngineId, `"${venueName}" Lagos Nigeria`);
+    if (images.length > 0) {
+      console.log(`Found ${images.length} images using venue name search for ${venueName}`);
+      return images;
     }
 
-    const searchData = await searchResponse.json();
-    const imageUrls = searchData.items?.slice(0, 3).map((img: any) => img.link).filter((url: string) => url) || [];
-    
-    if (imageUrls.length > 0) {
-      console.log(`Found ${imageUrls.length} images for ${venueName}`);
-      return imageUrls;
+    // Strategy 2: Search venue name + category
+    images = await googleImageSearch(googleApiKey, searchEngineId, `"${venueName}" ${category} Lagos`);
+    if (images.length > 0) {
+      console.log(`Found ${images.length} images using venue + category search for ${venueName}`);
+      return images;
     }
-    
-    // Fallback search with generic terms
-    const fallbackQuery = `${category} Lagos Nigeria interior`;
-    const fallbackUrl = `https://www.googleapis.com/customsearch/v1?key=${googleApiKey}&cx=${searchEngineId}&q=${encodeURIComponent(fallbackQuery)}&searchType=image&num=3&imgSize=large&safe=active`;
-    
-    const fallbackResponse = await fetch(fallbackUrl);
-    if (fallbackResponse.ok) {
-      const fallbackData = await fallbackResponse.json();
-      const fallbackImages = fallbackData.items?.slice(0, 3).map((img: any) => img.link).filter((url: string) => url) || [];
-      
-      if (fallbackImages.length > 0) {
-        console.log(`Found ${fallbackImages.length} fallback images for ${category}`);
-        return fallbackImages;
-      }
+
+    // Strategy 3: Search with location details
+    images = await googleImageSearch(googleApiKey, searchEngineId, `${venueName} ${location} ${category} restaurant bar club`);
+    if (images.length > 0) {
+      console.log(`Found ${images.length} images using location search for ${venueName}`);
+      return images;
     }
+
+    // Strategy 4: Search for reviews/social media
+    images = await googleImageSearch(googleApiKey, searchEngineId, `${venueName} Lagos review interior exterior photos`);
+    if (images.length > 0) {
+      console.log(`Found ${images.length} images using review search for ${venueName}`);
+      return images;
+    }
+
+    console.log(`No images found via Google for ${venueName}, trying web search`);
+    return await searchVenueImagesWeb(venueName, category, location);
     
-    return getFallbackImages(category);
   } catch (error) {
     console.error(`Error fetching images for ${venueName}:`, error);
-    return getFallbackImages(category);
+    return await searchVenueImagesWeb(venueName, category, location);
   }
 }
 
-function getFallbackImages(category: string): string[] {
-  // Curated stock images for different venue categories
-  const fallbackImageMap: Record<string, string[]> = {
+async function googleImageSearch(apiKey: string, searchEngineId: string, query: string): Promise<string[]> {
+  try {
+    const searchUrl = `https://www.googleapis.com/customsearch/v1?key=${apiKey}&cx=${searchEngineId}&q=${encodeURIComponent(query)}&searchType=image&num=3&imgSize=large&safe=active&lr=lang_en`;
+    
+    console.log(`Google search query: ${query}`);
+    
+    const response = await fetch(searchUrl);
+    
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.log(`Google API error (${response.status}): ${errorText}`);
+      return [];
+    }
+
+    const data = await response.json();
+    
+    if (data.error) {
+      console.log(`Google API error: ${data.error.message}`);
+      return [];
+    }
+    
+    const images = data.items?.slice(0, 3).map((img: any) => img.link).filter((url: string) => 
+      url && 
+      !url.includes('placeholder') && 
+      !url.includes('default') && 
+      !url.includes('no-image') &&
+      (url.includes('.jpg') || url.includes('.jpeg') || url.includes('.png') || url.includes('.webp'))
+    ) || [];
+    
+    console.log(`Google search returned ${images.length} valid images`);
+    return images;
+  } catch (error) {
+    console.error(`Google image search error: ${error}`);
+    return [];
+  }
+}
+
+async function searchVenueImagesWeb(venueName: string, category: string, location: string): Promise<string[]> {
+  try {
+    console.log(`Web search fallback for: ${venueName}`);
+    
+    // Search for the venue website or social media
+    const searchQueries = [
+      `${venueName} Lagos Nigeria site:instagram.com OR site:facebook.com`,
+      `${venueName} Lagos restaurant bar club photos`,
+      `${venueName} Lagos Nigeria review images`,
+      `"${venueName}" Lagos Nigeria interior exterior`
+    ];
+
+    for (const query of searchQueries) {
+      try {
+        // Use a basic web search approach
+        const searchUrl = `https://html.duckduckgo.com/html/?q=${encodeURIComponent(query)}`;
+        const response = await fetch(searchUrl, {
+          headers: {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+          }
+        });
+        
+        if (response.ok) {
+          const html = await response.text();
+          const imageUrls = extractImageUrlsFromHtml(html, venueName);
+          if (imageUrls.length > 0) {
+            console.log(`Found ${imageUrls.length} images via web search for ${venueName}`);
+            return imageUrls;
+          }
+        }
+      } catch (error) {
+        console.log(`Web search failed for query: ${query}`);
+        continue;
+      }
+    }
+    
+    // If all searches fail, return enhanced fallback images
+    console.log(`All search methods failed for ${venueName}, using enhanced fallback`);
+    return getEnhancedFallbackImages(category, venueName);
+    
+  } catch (error) {
+    console.error(`Web search error for ${venueName}:`, error);
+    return getEnhancedFallbackImages(category, venueName);
+  }
+}
+
+function extractImageUrlsFromHtml(html: string, venueName: string): string[] {
+  const imageUrls: string[] = [];
+  
+  // Simple regex to find image URLs in HTML
+  const imgRegex = /<img[^>]+src=["']([^"']+)["'][^>]*>/gi;
+  let match;
+  
+  while ((match = imgRegex.exec(html)) !== null && imageUrls.length < 3) {
+    const url = match[1];
+    if (url && 
+        (url.startsWith('http') || url.startsWith('https')) &&
+        (url.includes('.jpg') || url.includes('.jpeg') || url.includes('.png') || url.includes('.webp')) &&
+        !url.includes('logo') && 
+        !url.includes('icon') &&
+        !url.includes('placeholder')) {
+      imageUrls.push(url);
+    }
+  }
+  
+  return imageUrls;
+}
+
+function getEnhancedFallbackImages(category: string, venueName?: string): string[] {
+  // Enhanced fallback with more variety and venue-specific selection
+  const allFallbackImages: Record<string, string[]> = {
     'Restaurant': [
       'https://images.unsplash.com/photo-1414235077428-338989a2e8c0?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
       'https://images.unsplash.com/photo-1551632811-561732d1e306?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
-      'https://images.unsplash.com/photo-1586511925558-a4c6376fe65f?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80'
+      'https://images.unsplash.com/photo-1586511925558-a4c6376fe65f?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1517248135467-4c7edcad34c4?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1555396273-367ea4eb4db5?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80'
     ],
     'Bar': [
       'https://images.unsplash.com/photo-1572116469696-31de0f17cc34?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
       'https://images.unsplash.com/photo-1566417713940-fe7c737a9ef2?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
-      'https://images.unsplash.com/photo-1578662996442-48f60103fc96?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80'
+      'https://images.unsplash.com/photo-1578662996442-48f60103fc96?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1571997478779-2adcbbe9ab2f?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1569949381669-ecf31ae8e613?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80'
     ],
     'Club': [
       'https://images.unsplash.com/photo-1470229722913-7c0e2dbbafd3?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
       'https://images.unsplash.com/photo-1571974599782-87c8c4da5fa2?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
-      'https://images.unsplash.com/photo-1574391884720-bbc31d6424f4?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80'
+      'https://images.unsplash.com/photo-1574391884720-bbc31d6424f4?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1571936829411-5ba000dff9dd?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1582267925214-b4b7cbf30f16?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80'
     ],
     'Cafe': [
       'https://images.unsplash.com/photo-1501339847302-ac426a4a7cbb?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
       'https://images.unsplash.com/photo-1559925393-8be0ec4767c8?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
-      'https://images.unsplash.com/photo-1554118811-1e0d58224f24?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80'
+      'https://images.unsplash.com/photo-1554118811-1e0d58224f24?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1445116572660-236099ec97a0?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1493857671505-72967e2e2760?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80'
+    ],
+    'Hotel': [
+      'https://images.unsplash.com/photo-1551882547-ff40c63fe5fa?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1582719478250-c89cae4dc85b?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80',
+      'https://images.unsplash.com/photo-1563911302283-d2bc129e7570?ixlib=rb-4.0.3&auto=format&fit=crop&w=1200&q=80'
     ]
   };
   
-  const images = fallbackImageMap[category] || fallbackImageMap['Restaurant'];
-  return [images[Math.floor(Math.random() * images.length)]];
+  const categoryImages = allFallbackImages[category] || allFallbackImages['Restaurant'];
+  
+  // Use venue name to consistently select the same images for each venue
+  if (venueName) {
+    const hash = venueName.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
+    const startIndex = hash % categoryImages.length;
+    return [categoryImages[startIndex]];
+  }
+  
+  // Return a random image if no venue name
+  return [categoryImages[Math.floor(Math.random() * categoryImages.length)]];
+}
+
+// Legacy function for compatibility
+function getFallbackImages(category: string): string[] {
+  return getEnhancedFallbackImages(category);
 }
 
 function getFallbackVenues(category: string, lga: string) {
@@ -401,7 +527,7 @@ function getFallbackVenues(category: string, lga: string) {
         saturday: '9:00 AM - 11:00 PM',
         sunday: '10:00 AM - 9:00 PM'
       },
-      professional_media_urls: getFallbackImages(category),
+      professional_media_urls: getEnhancedFallbackImages(category, `${category} in ${lga}`),
       is_verified: false,
       latitude: 6.4281,
       longitude: 3.4219,
