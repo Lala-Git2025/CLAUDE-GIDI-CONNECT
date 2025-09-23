@@ -163,7 +163,7 @@ async function scrapeVenueData(category: string, location: string, lga?: string)
       .slice(0, 20); // Limit to 20 venues per request
 
     // Process venues with async image fetching
-    const venueResults = await Promise.all(venueElements.map(async (element: any) => {
+    const venues = await Promise.all(venueElements.map(async (element: any) => {
         const tags = element.tags || {};
         
         // Get coordinates
@@ -192,11 +192,7 @@ async function scrapeVenueData(category: string, location: string, lga?: string)
         // Fetch images for this venue
         const images = await getVenueImages(tags.name, venueCategory, targetLGA);
         
-        // Skip venues without real images
-        if (!images || images.length === 0) {
-          console.log(`⏭️ Skipping ${tags.name} - no real images found`);
-          return null;
-        }
+        console.log(`✅ Found ${images.length} images for ${tags.name}`);
 
         return {
           id: crypto.randomUUID(),
@@ -221,10 +217,8 @@ async function scrapeVenueData(category: string, location: string, lga?: string)
         };
       }));
 
-    // Filter out null results (venues without real images)
-    const venues = venueResults.filter(venue => venue !== null);
-    
-    console.log(`Successfully transformed ${venues.length} venues with real images (skipped ${venueResults.length - venues.length} without real images)`);
+    console.log(`Successfully transformed ${venues.length} venues with images`);
+    return venues;
     return venues;
 
   } catch (error) {
@@ -352,9 +346,9 @@ async function getVenueImages(venueName: string, category: string, location: str
     if (searchEngineId) console.log(`Search Engine ID: ${searchEngineId}`);
     
     if (!googleApiKey || !searchEngineId || googleApiKey.length < 10) {
-      console.log('❌ Google API credentials missing or invalid, skipping venue due to no real images');
-      // Instead of fallback images, skip venues that can't get real images
-      return [];
+      console.log('⚠️ Google API credentials missing or invalid, using high-quality fallback images');
+      // Use curated high-quality images as backup
+      return getEnhancedFallbackImages(category, venueName + location);
     }
 
     console.log('✅ Google API credentials found, proceeding with search');
@@ -387,12 +381,12 @@ async function getVenueImages(venueName: string, category: string, location: str
       return images;
     }
 
-    console.log(`No images found via Google for ${venueName}, skipping venue - no real images available`);
-    return []; // Skip venue if no real images found
+    console.log(`No images found via Google for ${venueName}, using curated fallback images`);
+    return getEnhancedFallbackImages(category, venueName + location);
     
   } catch (error) {
     console.error(`Error fetching images for ${venueName}:`, error);
-    return []; // Skip venue on error instead of fallback
+    return getEnhancedFallbackImages(category, venueName + location);
   }
 }
 
