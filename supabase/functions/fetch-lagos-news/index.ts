@@ -102,7 +102,7 @@ serve(async (req) => {
           console.log('📀 News cached in database successfully');
         }
       } catch (dbError) {
-        console.error('⚠️ Database caching failed:', dbError.message);
+        console.error('⚠️ Database caching failed:', dbError instanceof Error ? dbError.message : 'Unknown error');
       }
     }
 
@@ -135,7 +135,7 @@ serve(async (req) => {
         success: true,
         data: finalData,
         source: cachedNews && cachedNews.length > 0 ? 'cached' : 'emergency_fallback',
-        error: error.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date().toISOString()
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
@@ -146,7 +146,7 @@ serve(async (req) => {
         success: true,
         data: getFallbackNews(),
         source: 'emergency_fallback',
-        error: error.message,
+        error: error instanceof Error ? error.message : 'Unknown error',
         timestamp: new Date().toISOString()
       }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },

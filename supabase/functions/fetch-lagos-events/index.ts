@@ -64,7 +64,7 @@ serve(async (req) => {
       success: true,
       data: cachedEvents || [],
       source: 'cached',
-      error: error.message,
+      error: error instanceof Error ? error.message : 'Unknown error',
       timestamp: new Date().toISOString()
     }), {
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
