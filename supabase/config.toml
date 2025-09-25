@@ -28,3 +28,6 @@ verify_jwt = false
 
 [functions.fetch-lagos-events]
 verify_jwt = false
+
+[functions.scrape-lagos-venues]
+verify_jwt = false
