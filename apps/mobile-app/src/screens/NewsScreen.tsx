@@ -1,290 +1,408 @@
-import React from 'react';
-import {
-  View,
-  Text,
-  ScrollView,
-  StyleSheet,
-  TouchableOpacity,
-  Image,
-  ActivityIndicator,
-  RefreshControl,
-  Linking,
-  Dimensions,
-} from 'react-native';
-import { useQuery } from '@tanstack/react-query';
-import { supabase } from '../lib/supabase';
+import { useState, useEffect } from 'react';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Image, ActivityIndicator, RefreshControl, Linking } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useNavigation } from '@react-navigation/native';
+import { supabase } from '../config/supabase';
+import { useFonts, Orbitron_700Bold, Orbitron_900Black } from '@expo-google-fonts/orbitron';
 
-const { width } = Dimensions.get('window');
-
-interface NewsArticle {
+interface NewsItem {
   id: string;
   title: string;
-  summary?: string;
+  summary: string;
   category: string;
-  publish_date: string;
   external_url?: string;
   featured_image_url?: string;
+  publish_date: string;
   source?: string;
 }
 
+// No fallback news - always use latest from Supabase
+
 export default function NewsScreen() {
-  const { data: news = [], isLoading, refetch, isRefetching } = useQuery({
-    queryKey: ['news'],
-    queryFn: async () => {
+  const navigation = useNavigation();
+  const [news, setNews] = useState<NewsItem[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
+  const [activeCategory, setActiveCategory] = useState('All');
+
+  // Load Orbitron font
+  const [fontsLoaded] = useFonts({
+    Orbitron_700Bold,
+    Orbitron_900Black,
+  });
+
+  const categories = ['All', 'traffic', 'events', 'nightlife', 'food', 'general'];
+
+  if (!fontsLoaded) {
+    return null;
+  }
+
+  // Fetch news from Supabase
+  const fetchNews = async (isRefresh = false) => {
+    if (isRefresh) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
+
+    try {
       const { data, error } = await supabase
         .from('news')
         .select('*')
-        .eq('is_active', true)
+        .not('external_url', 'is', null)  // Only fetch articles with URLs
         .order('publish_date', { ascending: false })
-        .limit(20);
+        .limit(30);  // Fetch 30 to account for filtering
 
-      if (error) throw error;
-      return (data as NewsArticle[]) || [];
-    },
-    refetchInterval: 3 * 60 * 60 * 1000, // Auto-refresh every 3 hours
-    refetchIntervalInBackground: true, // Continue refreshing even when app is in background
-  });
+      if (error) {
+        console.error('Error fetching news:', error);
+        // Keep existing news on error (don't clear the list)
+      } else if (data && data.length > 0) {
+        // Filter out articles without valid URLs (safety check)
+        const validNews = data.filter(item => {
+          if (!item.external_url) return false;
+          const urlLower = item.external_url.toLowerCase();
+          // Exclude fake URLs
+          if (urlLower.includes('example.com') ||
+              urlLower.includes('localhost') ||
+              urlLower.includes('test.com') ||
+              urlLower.includes('placeholder')) {
+            return false;
+          }
+          return item.external_url.startsWith('http');
+        });
+
+        setNews(validNews.slice(0, 20));  // Take top 20 after filtering
+      }
+      // If no data, keep existing news (cached from previous fetch)
+    } catch (err) {
+      console.error('Failed to fetch news:', err);
+      // Keep existing news on error
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
+    }
+  };
+
+  // Fetch news on component mount
+  useEffect(() => {
+    fetchNews();
+  }, []);
+
 
   const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
     const now = new Date();
-    const diffTime = Math.abs(now.getTime() - date.getTime());
-    const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
+    const publishDate = new Date(dateString);
+    const diffInMs = now.getTime() - publishDate.getTime();
+    const diffInMins = Math.floor(diffInMs / (1000 * 60));
+    const diffInHours = Math.floor(diffInMs / (1000 * 60 * 60));
+    const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
 
-    if (diffDays === 0) {
-      return 'Today';
-    } else if (diffDays === 1) {
-      return 'Yesterday';
-    } else if (diffDays < 7) {
-      return `${diffDays} days ago`;
+    if (diffInMins < 60) {
+      return `${diffInMins}m ago`;
+    } else if (diffInHours < 24) {
+      return `${diffInHours}h ago`;
+    } else if (diffInDays < 7) {
+      return `${diffInDays}d ago`;
     } else {
-      return date.toLocaleDateString('en-US', {
-        month: 'short',
-        day: 'numeric',
-        year: 'numeric',
+      return publishDate.toLocaleDateString('en-US', { month: 'short', day: 'numeric' });
+    }
+  };
+
+  const openNewsArticle = (url?: string) => {
+    if (url) {
+      Linking.openURL(url).catch(err => {
+        console.error('Failed to open URL:', err);
+        alert('Could not open article');
       });
     }
   };
 
-  const sanitizeUrl = (url: string) => {
-    if (!url) return null;
-    const trimmed = url.trim();
-    if (trimmed.startsWith('http://') || trimmed.startsWith('https://')) {
-      return trimmed;
-    }
-    return null;
-  };
+  const filteredNews = news.filter(item => {
+    if (activeCategory === 'All') return true;
+    return item.category.toLowerCase() === activeCategory.toLowerCase();
+  });
 
-  const handleOpenArticle = (url: string) => {
-    const safeUrl = sanitizeUrl(url);
-    if (safeUrl) {
-      Linking.openURL(safeUrl).catch((err) => console.error('Failed to open URL:', err));
-    }
+  const onRefresh = () => {
+    fetchNews(true);
   };
-
-  if (isLoading) {
-    return (
-      <View style={styles.container}>
-        <View style={styles.header}>
-          <Text style={styles.title}>GIDI News</Text>
-          <Text style={styles.subtitle}>Stay updated with the latest from Lagos</Text>
-        </View>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.horizontalScrollContent}
-          style={styles.horizontalScroll}
-        >
-          {[...Array(5)].map((_, i) => (
-            <View key={i} style={styles.skeletonCard} />
-          ))}
-        </ScrollView>
-      </View>
-    );
-  }
 
   return (
-    <ScrollView
-      style={styles.container}
-      showsVerticalScrollIndicator={false}
-      refreshControl={
-        <RefreshControl refreshing={isRefetching} onRefresh={refetch} tintColor="#EAB308" />
-      }
-    >
-      <View style={styles.header}>
-        <View style={styles.headerContent}>
-          <View style={styles.headerTextContainer}>
-            <Text style={styles.title}>GIDI News</Text>
-            <Text style={styles.subtitle}>Latest from Lagos</Text>
+    <SafeAreaView style={styles.container}>
+      <ScrollView
+        style={styles.scrollView}
+        refreshControl={
+          <RefreshControl
+            refreshing={refreshing}
+            onRefresh={onRefresh}
+            tintColor="#EAB308"
+          />
+        }
+      >
+        {/* Header */}
+        <View style={styles.header}>
+          <TouchableOpacity onPress={() => navigation.goBack()}>
+            <Text style={styles.backButton}>←</Text>
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>GIDI NEWS</Text>
+          <Text style={styles.headerIcon}>📰</Text>
+        </View>
+
+        {/* Page Title */}
+        <View style={styles.titleSection}>
+          <View style={styles.liveIndicator}>
+            <View style={styles.liveDot} />
+            <Text style={styles.liveText}>LIVE</Text>
           </View>
-          <TouchableOpacity onPress={() => refetch()} style={styles.refreshButton} disabled={isRefetching}>
-            <Text style={[styles.refreshIcon, isRefetching && styles.refreshIconSpinning]}>🔄</Text>
-          </TouchableOpacity>
+          <Text style={styles.title}>Latest Lagos News</Text>
+          <Text style={styles.subtitle}>Stay updated with what's happening in Lagos</Text>
         </View>
-      </View>
 
-      {news.length === 0 ? (
-        <View style={styles.emptyState}>
-          <Text style={styles.emptyIcon}>📰</Text>
-          <Text style={styles.emptyText}>No news articles found.</Text>
-          <TouchableOpacity style={styles.refreshTextButton} onPress={() => refetch()}>
-            <Text style={styles.refreshTextButtonText}>Try refreshing</Text>
-          </TouchableOpacity>
+        {/* Categories */}
+        <View style={styles.categoriesSection}>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoriesScroll}>
+            {categories.map((category) => (
+              <TouchableOpacity
+                key={category}
+                style={[
+                  styles.categoryButton,
+                  activeCategory === category && styles.categoryButtonActive
+                ]}
+                onPress={() => setActiveCategory(category)}
+              >
+                <Text style={[
+                  styles.categoryButtonText,
+                  activeCategory === category && styles.categoryButtonTextActive
+                ]}>
+                  {category.charAt(0).toUpperCase() + category.slice(1)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
         </View>
-      ) : (
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.horizontalScrollContent}
-          style={styles.horizontalScroll}
-        >
-          {news.map((article) => {
-            const safeUrl = sanitizeUrl(article.external_url || '');
 
-            return (
+        {/* News Feed */}
+        <View style={styles.newsSection}>
+          <Text style={styles.sectionTitle}>
+            {filteredNews.length} articles found
+          </Text>
+
+          {loading ? (
+            <ActivityIndicator size="large" color="#EAB308" style={styles.loader} />
+          ) : (
+            filteredNews.map((article) => (
               <TouchableOpacity
                 key={article.id}
                 style={styles.newsCard}
-                onPress={() => safeUrl && handleOpenArticle(safeUrl)}
-                disabled={!safeUrl}
+                onPress={() => openNewsArticle(article.external_url)}
               >
-                <View style={styles.imageContainer}>
+                {article.featured_image_url && (
                   <Image
-                    source={{
-                      uri: article.featured_image_url || 'https://images.unsplash.com/photo-1568822617270-2e2b9c7c7a1e?w=800&q=80'
-                    }}
+                    source={{ uri: article.featured_image_url }}
                     style={styles.newsImage}
                     resizeMode="cover"
                   />
-                </View>
+                )}
 
                 <View style={styles.newsContent}>
-                  <Text style={styles.newsTitle} numberOfLines={3}>
-                    {article.title}
-                  </Text>
-
-                  {article.summary && (
-                    <Text style={styles.newsSummary} numberOfLines={3}>
-                      {article.summary}
-                    </Text>
-                  )}
-
-                  <View style={styles.newsFooter}>
-                    <Text style={styles.newsDate}>{formatDate(article.publish_date)}</Text>
-                    {article.source && (
-                      <Text style={styles.newsSource} numberOfLines={1}>
-                        {article.source}
-                      </Text>
-                    )}
+                  <View style={styles.newsHeader}>
+                    <View style={styles.categoryBadge}>
+                      <Text style={styles.categoryBadgeText}>{article.category}</Text>
+                    </View>
+                    <Text style={styles.newsTime}>{formatDate(article.publish_date)}</Text>
                   </View>
 
-                  {safeUrl && (
-                    <View style={styles.linkIndicator}>
-                      <Text style={styles.linkIcon}>↗</Text>
-                    </View>
-                  )}
+                  <Text style={styles.newsTitle}>{article.title}</Text>
+                  <Text style={styles.newsSummary}>{article.summary}</Text>
+
+                  <View style={styles.newsFooter}>
+                    {article.source && (
+                      <Text style={styles.newsSource}>📰 {article.source}</Text>
+                    )}
+                    {article.external_url && (
+                      <Text style={styles.readMore}>Read More →</Text>
+                    )}
+                  </View>
                 </View>
               </TouchableOpacity>
-            );
-          })}
-        </ScrollView>
-      )}
-
-      <View style={{ height: 100 }} />
-    </ScrollView>
+            ))
+          )}
+        </View>
+      </ScrollView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#000' },
-  header: { paddingHorizontal: 20, paddingTop: 60, paddingBottom: 24 },
-  headerContent: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'flex-start' },
-  headerTextContainer: { flex: 1 },
-  title: { color: '#fff', fontSize: 30, fontWeight: '700' as const, marginBottom: 8 },
-  subtitleRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
-  aiPoweredBadge: {
+  container: {
+    flex: 1,
+    backgroundColor: '#000',
+  },
+  scrollView: {
+    flex: 1,
+  },
+  // Header
+  header: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
-    backgroundColor: 'rgba(234, 179, 8, 0.15)',
-    paddingHorizontal: 8,
-    paddingVertical: 4,
-    borderRadius: 12,
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 16,
+    borderBottomWidth: 1,
+    borderBottomColor: '#27272a',
+  },
+  backButton: {
+    fontSize: 24,
+    color: '#EAB308',
+    fontWeight: 'bold',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontFamily: 'Orbitron_900Black',
+    color: '#EAB308',
+    letterSpacing: 2,
+  },
+  headerIcon: {
+    fontSize: 20,
+  },
+  // Title
+  titleSection: {
+    paddingHorizontal: 16,
+    paddingTop: 24,
+    paddingBottom: 16,
+  },
+  liveIndicator: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: '#EF4444',
+    marginRight: 6,
+  },
+  liveText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#EF4444',
+    letterSpacing: 1,
+  },
+  title: {
+    fontSize: 28,
+    fontWeight: 'bold',
+    color: '#fff',
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 14,
+    color: '#9ca3af',
+  },
+  // Categories
+  categoriesSection: {
+    marginBottom: 24,
+  },
+  categoriesScroll: {
+    paddingHorizontal: 16,
+  },
+  categoryButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    backgroundColor: 'transparent',
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: 'rgba(234, 179, 8, 0.3)',
+    borderColor: '#27272a',
+    marginRight: 8,
   },
-  aiIcon: { fontSize: 12 },
-  aiText: { color: '#EAB308', fontSize: 10, fontWeight: '700' as const, letterSpacing: 0.5 },
-  subtitle: { color: '#9ca3af', fontSize: 12 },
-  refreshButton: { padding: 8 },
-  refreshIcon: { fontSize: 20 },
-  refreshIconSpinning: { opacity: 0.5 },
-  loadingContainer: { paddingHorizontal: 20 },
-  horizontalScroll: {
-    marginBottom: 20,
+  categoryButtonActive: {
+    backgroundColor: '#EAB308',
+    borderColor: '#EAB308',
   },
-  horizontalScrollContent: {
-    paddingHorizontal: 20,
-    gap: 16,
+  categoryButtonText: {
+    fontSize: 12,
+    color: '#9ca3af',
+    fontWeight: '500',
   },
+  categoryButtonTextActive: {
+    color: '#000',
+  },
+  // News Section
+  newsSection: {
+    paddingHorizontal: 16,
+    marginBottom: 32,
+  },
+  sectionTitle: {
+    fontSize: 14,
+    color: '#9ca3af',
+    marginBottom: 16,
+  },
+  loader: {
+    marginTop: 32,
+  },
+  // News Card
   newsCard: {
-    width: width * 0.85,
-    backgroundColor: '#1f2937',
-    borderWidth: 1,
-    borderColor: '#374151',
+    backgroundColor: '#18181b',
     borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#27272a',
+    marginBottom: 16,
     overflow: 'hidden',
   },
-  imageContainer: { position: 'relative' as const, height: 200 },
-  newsImage: { width: '100%', height: '100%' },
+  newsImage: {
+    width: '100%',
+    height: 200,
+    backgroundColor: '#27272a',
+  },
+  newsContent: {
+    padding: 16,
+  },
+  newsHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
   categoryBadge: {
-    position: 'absolute' as const,
-    top: 8,
-    left: 8,
-    backgroundColor: '#3b82f6',
-    paddingHorizontal: 8,
+    backgroundColor: '#EAB308',
+    paddingHorizontal: 12,
     paddingVertical: 4,
     borderRadius: 4,
   },
-  categoryBadgeText: { color: '#fff', fontSize: 10, fontWeight: '700' as const },
-  newsContent: { padding: 12 },
+  categoryBadgeText: {
+    fontSize: 10,
+    fontWeight: 'bold',
+    color: '#000',
+    textTransform: 'uppercase',
+  },
+  newsTime: {
+    fontSize: 12,
+    color: '#9ca3af',
+  },
   newsTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
     color: '#fff',
-    fontSize: 14,
-    fontWeight: '700' as const,
-    marginBottom: 6,
-    lineHeight: 18,
+    marginBottom: 8,
+    lineHeight: 24,
   },
   newsSummary: {
+    fontSize: 14,
     color: '#9ca3af',
-    fontSize: 12,
-    marginBottom: 8,
-    lineHeight: 16,
+    lineHeight: 20,
+    marginBottom: 12,
   },
-  newsFooter: { marginTop: 4 },
-  newsDate: { color: '#6b7280', fontSize: 11, marginBottom: 2 },
-  newsSource: { color: '#9ca3af', fontSize: 11, fontWeight: '500' as const },
-  linkIndicator: {
-    position: 'absolute' as const,
-    top: 8,
-    right: 8,
-    backgroundColor: 'rgba(234, 179, 8, 0.9)',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    justifyContent: 'center',
+  newsFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
   },
-  linkIcon: { color: '#000', fontSize: 12, fontWeight: '700' as const },
-  skeletonCard: {
-    width: width * 0.85,
-    height: 320,
-    backgroundColor: '#1f2937',
-    borderRadius: 12,
+  newsSource: {
+    fontSize: 12,
+    color: '#6b7280',
   },
-  emptyState: { alignItems: 'center', paddingVertical: 80, paddingHorizontal: 20 },
-  emptyIcon: { fontSize: 64, marginBottom: 16 },
-  emptyText: { color: '#9ca3af', fontSize: 16, marginBottom: 16, textAlign: 'center' as const },
-  refreshTextButton: { marginTop: 8 },
-  refreshTextButtonText: { color: '#EAB308', fontSize: 14, fontWeight: '600' as const },
+  readMore: {
+    fontSize: 12,
+    color: '#EAB308',
+    fontWeight: '600',
+  },
 });

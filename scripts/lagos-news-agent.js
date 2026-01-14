@@ -20,6 +20,7 @@
 import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
+import * as cheerio from 'cheerio';
 
 dotenv.config();
 
@@ -45,247 +46,395 @@ const supabase = SUPABASE_SERVICE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
   : null;
 
-// --- SEARCH QUERIES WITH SPECIFIC SOURCES ---
-const SEARCH_QUERIES = [
-  // Lagos State Government
-  "site:lagosstate.gov.ng latest news",
-  "site:lagosstate.gov.ng traffic update",
-  "Lagos State Government announcement today",
-
-  // Famous Lagos Blogs & News Sites
-  "site:thecable.ng Lagos news",
-  "site:punchng.com Lagos news today",
-  "site:premiumtimesng.com Lagos",
-  "site:lindaikejisblog.com Lagos",
-  "site:bellanaija.com Lagos events",
-  "site:guardian.ng Lagos news",
-  "site:vanguardngr.com Lagos",
-  "site:notjustok.com Lagos entertainment",
-
-  // Traffic & Transport
-  "Lagos traffic update today",
-  "Third Mainland Bridge traffic alert",
-  "Lekki toll gate news",
-  "LASTMA traffic report",
-
-  // Events & Entertainment
-  "Lagos events this weekend",
-  "Lagos nightlife opening",
-  "Lagos concerts this week",
-  "Lagos restaurant opening",
-];
-
 // --- FUNCTIONS ---
 
 /**
- * Exponential backoff retry wrapper for handling rate limits
- * @param {Function} fn - Async function to retry
- * @param {number} maxRetries - Maximum number of retry attempts (default: 5)
- * @param {number} initialDelay - Initial delay in milliseconds (default: 2000)
+ * Scrape article details (image, date, summary) from a news article URL
  */
-async function retryWithExponentialBackoff(fn, maxRetries = 5, initialDelay = 2000) {
-  let lastError;
-
-  for (let attempt = 0; attempt <= maxRetries; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      lastError = error;
-
-      // Check if it's a rate limit error (429)
-      const isRateLimitError = error.response?.status === 429 ||
-                               error.message?.includes('429') ||
-                               error.message?.toLowerCase().includes('rate limit');
-
-      // If not a rate limit error, throw immediately
-      if (!isRateLimitError) {
-        throw error;
-      }
-
-      // If we've exhausted all retries, throw the error
-      if (attempt === maxRetries) {
-        console.error(`❌ Max retries (${maxRetries}) exceeded for rate limit error`);
-        throw error;
-      }
-
-      // Calculate delay with exponential backoff: 2s, 4s, 8s, 16s, 32s
-      const delay = initialDelay * Math.pow(2, attempt);
-
-      console.log(`⏳ Rate limit hit (429). Retry ${attempt + 1}/${maxRetries} after ${delay/1000}s...`);
-
-      // Wait before retrying
-      await new Promise(resolve => setTimeout(resolve, delay));
-    }
-  }
-
-  throw lastError;
-}
-
-/**
- * Search Google for Lagos news using Serper API
- */
-async function searchGoogle(query) {
-  if (!SERPER_API_KEY) {
-    console.log('⚠️  No SERPER_API_KEY found. Using simulated results.');
-    return getSimulatedResults(query);
-  }
-
+async function scrapeArticleDetails(articleUrl) {
   try {
-    const response = await axios.post(
-      'https://google.serper.dev/search',
-      { q: query, num: 5 },
-      { headers: { 'X-API-KEY': SERPER_API_KEY, 'Content-Type': 'application/json' } }
-    );
+    console.log(`   🔍 Scraping article from: ${articleUrl.substring(0, 50)}...`);
 
-    return response.data.organic?.map(result => ({
-      title: result.title,
-      snippet: result.snippet,
-      link: result.link,
-      date: result.date || new Date().toISOString(),
-    })) || [];
-  } catch (error) {
-    console.error(`❌ Search error for "${query}":`, error.message);
-    return getSimulatedResults(query);
-  }
-}
-
-/**
- * Fallback simulated search results (for testing without API)
- */
-function getSimulatedResults(query) {
-  const simulated = {
-    "Lagos traffic today": [
-      { title: "Heavy traffic at Lekki Toll Gate", snippet: "Major gridlock reported due to accident", link: "https://example.com/1" },
-      { title: "Third Mainland Bridge partially closed", snippet: "Lane closure for maintenance work", link: "https://example.com/2" },
-    ],
-    "Lagos events this week": [
-      { title: "Detty December: Burna Boy Live", snippet: "African Giant performs at Eko Atlantic this Saturday", link: "https://example.com/3" },
-      { title: "Lagos Food Festival 2025", snippet: "3-day culinary celebration at Muri Okunola Park", link: "https://example.com/4" },
-    ],
-    "Lagos nightlife news": [
-      { title: "New rooftop bar opens in VI", snippet: "Sky Lounge brings luxury nightlife to Victoria Island", link: "https://example.com/5" },
-    ],
-  };
-
-  return simulated[query] || [
-    { title: "Lagos News Update", snippet: `Latest updates about ${query}`, link: "https://example.com" }
-  ];
-}
-
-/**
- * Use Gemini AI with Google Search Grounding to search and analyze news
- */
-async function searchAndAnalyzeWithGemini(queries) {
-  const prompt = `You are an AI News Reporter for "Gidi Connect", a Lagos lifestyle discovery app.
-
-Search and analyze the latest Lagos news from these reliable sources:
-- Lagos State Government (lagosstate.gov.ng)
-- TheCable.ng
-- Punch Newspapers
-- Premium Times Nigeria
-- Linda Ikeji's Blog
-- BellaNaija
-- The Guardian Nigeria
-- Vanguard News
-- NotJustOk (for entertainment)
-
-Based on your web search for:
-${queries.map((q, i) => `${i + 1}. ${q}`).join('\n')}
-
-Create a JSON array with news items in EXACTLY this format:
-[
-  {
-    "title": "Short, catchy headline (max 60 chars)",
-    "summary": "One compelling sentence summary (max 150 chars)",
-    "category": "traffic" OR "events" OR "nightlife" OR "food" OR "general",
-    "external_url": "source article URL from your search",
-    "featured_image_url": "https://images.unsplash.com/photo-1568822617270-2e2b9c7c7a1e?w=800&q=80",
-    "sentiment": "positive" OR "negative" OR "neutral",
-    "priority": 1-5 (1=highest priority, 5=lowest)
-  }
-]
-
-Rules:
-- ONLY include news from the sources listed above (Lagos State Government, TheCable, Punch, Premium Times, Linda Ikeji, BellaNaija, Guardian, Vanguard, NotJustOk)
-- News must be from the last 24 hours only (very recent)
-- Include the actual source URL in external_url field
-- Prioritize: Lagos State Government announcements, traffic alerts, major events, new venue openings
-- Remove duplicate content
-- Use engaging, concise language
-- Return maximum 15 items, sorted by priority
-- Return ONLY valid JSON, no explanatory text
-
-IMPORTANT: Return the JSON array only, nothing else.`;
-
-  try {
-    // Wrap the API call with exponential backoff retry logic
-    const response = await retryWithExponentialBackoff(async () => {
-      return await axios.post(
-        `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-pro:generateContent?key=${GEMINI_API_KEY}`,
-        {
-          contents: [{
-            parts: [{ text: prompt }]
-          }],
-          tools: [{
-            googleSearch: {}
-          }]
-        },
-        {
-          headers: { 'Content-Type': 'application/json' }
-        }
-      );
+    const response = await axios.get(articleUrl, {
+      timeout: 10000,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+      }
     });
 
-    const aiText = response.data.candidates[0]?.content?.parts[0]?.text;
+    const $ = cheerio.load(response.data);
 
-    if (!aiText) {
-      throw new Error('No response from Gemini');
+    // --- EXTRACT IMAGE ---
+    let imageUrl = null;
+
+    // 1. Open Graph image (most reliable for news sites)
+    imageUrl = $('meta[property="og:image"]').attr('content');
+
+    // 2. Twitter card image
+    if (!imageUrl) {
+      imageUrl = $('meta[name="twitter:image"]').attr('content');
     }
 
-    // Extract JSON from response (Gemini sometimes wraps it in markdown)
-    const jsonMatch = aiText.match(/\[[\s\S]*\]/);
-    if (!jsonMatch) {
-      throw new Error('No valid JSON found in Gemini response');
+    // 3. First article image
+    if (!imageUrl) {
+      imageUrl = $('article img').first().attr('src');
     }
 
-    const newsItems = JSON.parse(jsonMatch[0]);
-    return newsItems;
+    // 4. Any image in main content
+    if (!imageUrl) {
+      imageUrl = $('.entry-content img, .post-content img, .article-content img').first().attr('src');
+    }
+
+    // Make sure the URL is absolute
+    if (imageUrl && !imageUrl.startsWith('http')) {
+      const urlObj = new URL(articleUrl);
+      if (imageUrl.startsWith('//')) {
+        imageUrl = `https:${imageUrl}`;
+      } else if (imageUrl.startsWith('/')) {
+        imageUrl = `${urlObj.protocol}//${urlObj.host}${imageUrl}`;
+      } else {
+        imageUrl = `${urlObj.protocol}//${urlObj.host}/${imageUrl}`;
+      }
+    }
+
+    // --- EXTRACT PUBLISH DATE ---
+    let publishDate = null;
+
+    // 1. Try Open Graph published time
+    let dateStr = $('meta[property="article:published_time"]').attr('content');
+
+    // 2. Try meta publish date
+    if (!dateStr) {
+      dateStr = $('meta[name="publish_date"]').attr('content');
+    }
+
+    // 3. Try meta date
+    if (!dateStr) {
+      dateStr = $('meta[name="date"]').attr('content');
+    }
+
+    // 4. Try time tag with datetime attribute
+    if (!dateStr) {
+      dateStr = $('time[datetime]').first().attr('datetime');
+    }
+
+    // 5. Try to extract from URL pattern (e.g., /2025/01/08/)
+    if (!dateStr) {
+      const urlDateMatch = articleUrl.match(/\/(\d{4})\/(\d{2})\/(\d{2})\//);
+      if (urlDateMatch) {
+        const [, year, month, day] = urlDateMatch;
+        dateStr = `${year}-${month}-${day}`;
+      }
+    }
+
+    // Parse and validate the date - MANDATORY check
+    if (dateStr) {
+      publishDate = new Date(dateStr);
+
+      // Validate the date is reasonable (not in future, not too old)
+      const now = new Date();
+      const sixtyDaysAgo = new Date(now.getTime() - 60 * 24 * 60 * 60 * 1000);
+      const oneYearAgo = new Date(now.getTime() - 365 * 24 * 60 * 60 * 1000);
+
+      // If date is in the future or more than 1 year old, reject it
+      if (publishDate > now || publishDate < oneYearAgo) {
+        console.log(`   ⚠️  Invalid date (${publishDate.toISOString().split('T')[0]}) - article too old or date error`);
+        return null;
+      }
+
+      // Check if article is recent (within last 60 days)
+      if (publishDate < sixtyDaysAgo) {
+        console.log(`   ⏰ Article too old (${publishDate.toISOString().split('T')[0]}) - skipping`);
+        return null;
+      }
+    } else {
+      // CRITICAL: If no date found, reject the article
+      console.log(`   ⚠️  No publish date found - rejecting article to ensure freshness`);
+      return null;
+    }
+
+    // --- EXTRACT SUMMARY ---
+    let summary = null;
+
+    // 1. Try Open Graph description
+    summary = $('meta[property="og:description"]').attr('content');
+
+    // 2. Try meta description
+    if (!summary) {
+      summary = $('meta[name="description"]').attr('content');
+    }
+
+    // 3. Try first paragraph of article content
+    if (!summary) {
+      summary = $('article p').first().text().trim();
+    }
+
+    // 4. Try any paragraph in entry content
+    if (!summary) {
+      summary = $('.entry-content p, .post-content p, .article-content p').first().text().trim();
+    }
+
+    // Clean up summary - remove extra whitespace and limit length
+    if (summary) {
+      summary = summary.replace(/\s+/g, ' ').trim();
+      if (summary.length > 150) {
+        summary = summary.substring(0, 147) + '...';
+      }
+    }
+
+    // Return all extracted details
+    const result = {
+      imageUrl,
+      publishDate: publishDate ? publishDate.toISOString() : new Date().toISOString(),
+      summary: summary || null
+    };
+
+    if (imageUrl) {
+      console.log(`   ✅ Image: ${imageUrl.substring(0, 60)}...`);
+    }
+    if (publishDate) {
+      console.log(`   📅 Date: ${publishDate.toISOString().split('T')[0]}`);
+    }
+    if (summary) {
+      console.log(`   📝 Summary: ${summary.substring(0, 50)}...`);
+    }
+
+    return result;
 
   } catch (error) {
-    console.error('❌ Gemini API error:', error.message);
-    console.log('⚠️  Falling back to simulated news...');
-
-    // Fallback: Return simulated news
-    return [
-      {
-        title: "Heavy traffic at Lekki Toll Gate",
-        summary: "Major gridlock reported due to accident. Motorists advised to use alternative routes.",
-        category: "traffic",
-        external_url: "https://example.com/1",
-        featured_image_url: "https://images.unsplash.com/photo-1589578527966-fdac0f44566c?w=800&q=80",
-        sentiment: "negative",
-        priority: 1
-      },
-      {
-        title: "Detty December: Burna Boy Live",
-        summary: "African Giant performs at Eko Atlantic this Saturday. Tickets still available.",
-        category: "events",
-        external_url: "https://example.com/2",
-        featured_image_url: "https://images.unsplash.com/photo-1533174072545-7a4b6ad7a6c3?w=800&q=80",
-        sentiment: "positive",
-        priority: 2
-      },
-      {
-        title: "New rooftop bar opens in VI",
-        summary: "Sky Lounge brings luxury nightlife experience to Victoria Island.",
-        category: "nightlife",
-        external_url: "https://example.com/3",
-        featured_image_url: "https://images.unsplash.com/photo-1514565131-fce0801e5785?w=800&q=80",
-        sentiment: "positive",
-        priority: 3
-      }
-    ];
+    console.log(`   ❌ Failed to scrape article: ${error.message}`);
+    return null;
   }
+}
+
+/**
+ * Scrape real news articles directly from Lagos news websites
+ */
+async function scrapeRealLagosNews() {
+  const newsItems = [];
+  const seenUrls = new Set(); // Track URLs to prevent duplicates within this run
+
+  // CRITICAL: Fetch existing URLs from database to prevent duplicates across runs
+  const existingUrls = new Set();
+  if (supabase) {
+    try {
+      console.log('🔍 Checking database for existing article URLs...');
+      const { data, error } = await supabase
+        .from('news')
+        .select('external_url');
+
+      if (!error && data) {
+        data.forEach(item => {
+          if (item.external_url) {
+            existingUrls.add(item.external_url);
+          }
+        });
+        console.log(`   ✅ Found ${existingUrls.size} existing URLs in database\n`);
+      }
+    } catch (error) {
+      console.log(`   ⚠️  Could not fetch existing URLs: ${error.message}\n`);
+    }
+  }
+
+  const sources = [
+    {
+      name: 'Linda Ikeji Blog',
+      url: 'https://www.lindaikejisblog.com/',
+      category: 'general'
+    },
+    {
+      name: 'Instablog9ja',
+      url: 'https://instablog9ja.com/',
+      category: 'nightlife'
+    },
+    {
+      name: '36ng Entertainment',
+      url: 'https://36ng.ng/category/entertainment/',
+      category: 'nightlife'
+    },
+    {
+      name: 'Information Nigeria Entertainment',
+      url: 'https://www.informationng.com/category/entertainment',
+      category: 'events'
+    },
+    {
+      name: 'Information Nigeria News',
+      url: 'https://www.informationng.com/category/news',
+      category: 'general'
+    },
+    {
+      name: 'Premium Times',
+      url: 'https://www.premiumtimesng.com/tag/lagos',
+      category: 'general'
+    },
+    {
+      name: 'Punch',
+      url: 'https://punchng.com/lagos/',
+      category: 'general'
+    },
+    {
+      name: 'BellaNaija Events',
+      url: 'https://www.bellanaija.com/category/events/',
+      category: 'events'
+    },
+    {
+      name: 'BellaNaija Entertainment',
+      url: 'https://www.bellanaija.com/category/entertainment/',
+      category: 'nightlife'
+    },
+    {
+      name: 'Pulse Nigeria Lagos',
+      url: 'https://www.pulse.ng/news/local/lagos',
+      category: 'general'
+    },
+    {
+      name: 'Pulse Entertainment',
+      url: 'https://www.pulse.ng/entertainment',
+      category: 'nightlife'
+    },
+    {
+      name: 'NotJustOk',
+      url: 'https://notjustok.com/news/',
+      category: 'nightlife'
+    },
+    {
+      name: 'Legit.ng Nigeria',
+      url: 'https://www.legit.ng/nigeria/',
+      category: 'general'
+    },
+    {
+      name: 'Legit.ng Entertainment',
+      url: 'https://www.legit.ng/entertainment/',
+      category: 'nightlife'
+    }
+  ];
+
+  console.log('📰 Scraping real articles from Lagos news sites...\n');
+
+  for (const source of sources) {
+    try {
+      console.log(`🔍 Scraping ${source.name}...`);
+
+      const response = await axios.get(source.url, {
+        timeout: 15000,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
+        }
+      });
+
+      const $ = cheerio.load(response.data);
+
+      // Find article links - try multiple selectors
+      const articleLinks = [];
+      $('article a, .post a, .entry-title a, h2 a, h3 a').each((i, elem) => {
+        const href = $(elem).attr('href');
+        const text = $(elem).text().trim();
+
+        // For entertainment/nightlife sources, accept all articles
+        // For general news sources, require "lagos" in title
+        const isRelevant = (source.category === 'events' || source.category === 'nightlife')
+          ? text.length > 20
+          : text.length > 20 && text.toLowerCase().includes('lagos');
+
+        if (href && text && isRelevant) {
+          let fullUrl = href;
+          if (!href.startsWith('http')) {
+            const baseUrl = new URL(source.url);
+            fullUrl = href.startsWith('/') ?
+              `${baseUrl.protocol}//${baseUrl.host}${href}` :
+              `${baseUrl.protocol}//${baseUrl.host}/${href}`;
+          }
+
+          articleLinks.push({ url: fullUrl, title: text });
+        }
+      });
+
+      // Take first 3 articles per source
+      const selectedArticles = articleLinks.slice(0, 3);
+
+      for (const article of selectedArticles) {
+        // Skip if we've already seen this URL in this run (prevent duplicates within run)
+        if (seenUrls.has(article.url)) {
+          console.log(`   ⏭️  Skipping duplicate (in this run): ${article.url.substring(0, 60)}...\n`);
+          continue;
+        }
+
+        // CRITICAL: Skip if URL already exists in database (prevent duplicates across runs)
+        if (existingUrls.has(article.url)) {
+          console.log(`   ⏭️  Skipping duplicate (already in database): ${article.url.substring(0, 60)}...\n`);
+          continue;
+        }
+
+        console.log(`   📄 Article: ${article.title.substring(0, 50)}...`);
+        console.log(`   🔗 URL: ${article.url.substring(0, 60)}...`);
+
+        // CRITICAL: Validate URL before scraping (prevent fake URLs)
+        const urlLower = article.url.toLowerCase();
+        const isFakeUrl = !article.url ||
+                          urlLower.includes('example.com') ||
+                          urlLower.includes('localhost') ||
+                          urlLower.includes('test.com') ||
+                          urlLower.includes('placeholder') ||
+                          article.url === '#' ||
+                          article.url.startsWith('javascript:') ||
+                          article.url === 'about:blank';
+
+        if (isFakeUrl) {
+          console.log(`   ⚠️  Skipped - invalid/fake URL detected\n`);
+          continue;
+        }
+
+        // Scrape the article page for details (image, date, summary)
+        const details = await scrapeArticleDetails(article.url);
+
+        // Skip if article is too old or failed to scrape
+        if (!details) {
+          console.log(`   ⚠️  Skipped - article rejected\n`);
+          continue;
+        }
+
+        if (details.imageUrl) {
+          // Final URL validation before adding to database
+          if (!article.url || !article.url.startsWith('http')) {
+            console.log(`   ⚠️  Skipped - missing or invalid URL\n`);
+            continue;
+          }
+
+          // Mark this URL as seen in both sets to prevent duplicates
+          seenUrls.add(article.url);
+          existingUrls.add(article.url);
+
+          newsItems.push({
+            title: article.title.substring(0, 100),
+            summary: details.summary || `Latest update from ${source.name} on Lagos news.`,
+            category: source.category,
+            external_url: article.url,
+            featured_image_url: details.imageUrl,
+            publish_date: details.publishDate,
+            sentiment: 'neutral',
+            priority: newsItems.length + 1
+          });
+
+          console.log(`   ✅ Added article with real details\n`);
+        } else {
+          console.log(`   ⚠️  Skipped - no image found\n`);
+        }
+
+        // Limit to 15 total articles
+        if (newsItems.length >= 15) break;
+      }
+
+      if (newsItems.length >= 15) break;
+
+      // Small delay between sources to be respectful
+      await new Promise(resolve => setTimeout(resolve, 2000));
+
+    } catch (error) {
+      console.log(`   ❌ Failed to scrape ${source.name}: ${error.message}\n`);
+    }
+  }
+
+  return newsItems;
 }
 
 /**
@@ -306,7 +455,7 @@ async function uploadToSupabase(newsItems) {
       category: item.category,
       external_url: item.external_url,
       featured_image_url: item.featured_image_url,
-      publish_date: new Date().toISOString(),
+      publish_date: item.publish_date || new Date().toISOString(),
       is_active: true,
       source: 'AI Agent',
     }));
@@ -336,23 +485,24 @@ async function runLagosNewsAgent() {
   console.log('🤖 GIDI NEWS AGENT: Starting...\n');
 
   try {
-    // Step 1 & 2 Combined: Gemini searches the web and analyzes results
-    console.log('🔍 STEP 1: Using Gemini AI with Google Search grounding...');
-    const queries = SEARCH_QUERIES.slice(0, 10); // Use first 10 queries to cover all sources
-    queries.forEach(q => console.log(`   📡 Query: "${q}"`));
+    // Step 1: Scrape real articles from Lagos news websites
+    console.log('🔍 STEP 1: Scraping real articles from Lagos news sites...');
+    const newsItems = await scrapeRealLagosNews();
+    console.log(`\n✅ Successfully scraped ${newsItems.length} articles with real images\n`);
 
-    console.log('\n🧠 STEP 2: Gemini is searching web and analyzing content...');
-    const newsItems = await searchAndAnalyzeWithGemini(queries);
-    console.log(`   ✓ Generated ${newsItems.length} formatted news items\n`);
+    if (newsItems.length === 0) {
+      throw new Error('No articles were successfully scraped. Check your internet connection or the news site structures may have changed.');
+    }
 
-    // Step 3: Upload to Supabase
-    console.log('📤 STEP 3: Uploading to Supabase...');
+    // Step 2: Upload to Supabase
+    console.log('📤 STEP 2: Uploading to Supabase...');
     await uploadToSupabase(newsItems);
 
     console.log('\n🎉 AGENT COMPLETED SUCCESSFULLY!');
     console.log(`   📊 Total items processed: ${newsItems.length}`);
-    console.log(`   💡 Powered by: Gemini AI with Google Search grounding`);
-    console.log(`   📰 Sources: Lagos State Govt, TheCable, Punch, Premium Times, Linda Ikeji, BellaNaija, Guardian, Vanguard`);
+    console.log(`   💡 Method: Direct web scraping from news sites`);
+    console.log(`   🖼️  All articles have REAL images scraped from source`);
+    console.log(`   📰 Sources: Punch, The Cable, Premium Times, Vanguard`);
     console.log(`   🕐 Next run: Set up a cron job to run this every 3 hours`);
 
   } catch (error) {

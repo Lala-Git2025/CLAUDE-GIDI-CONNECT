@@ -1,4 +1,4 @@
-import { Home, Search, Bookmark, User } from "lucide-react";
+import { Home, Search, Users, User } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Link, useLocation } from "react-router-dom";
 import { hapticClick } from "@/utils/haptics";
@@ -6,7 +6,7 @@ import { hapticClick } from "@/utils/haptics";
 const navItems = [
   { icon: Home, label: "Home", path: "/" },
   { icon: Search, label: "Explore", path: "/explore" },
-  { icon: Bookmark, label: "Events", path: "/events" },
+  { icon: Users, label: "Social", path: "/social" },
   { icon: User, label: "Profile", path: "/profile" },
 ];
 

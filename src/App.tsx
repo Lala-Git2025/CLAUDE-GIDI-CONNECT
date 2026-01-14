@@ -15,6 +15,7 @@ const Index = lazy(() => import("./pages/Index"));
 const VenueProfile = lazy(() => import("./pages/VenueProfile"));
 const Explore = lazy(() => import("./pages/Explore"));
 const Events = lazy(() => import("./pages/Events"));
+const Social = lazy(() => import("./pages/Social"));
 const Profile = lazy(() => import("./pages/Profile"));
 const GetStarted = lazy(() => import("./pages/GetStarted"));
 const Login = lazy(() => import("./pages/Login"));
@@ -57,6 +58,7 @@ const App = () => (
                 <Route path="/" element={<Index />} />
                 <Route path="/venue/:venueId" element={<VenueProfile />} />
                 <Route path="/explore" element={<Explore />} />
+                <Route path="/social" element={<Social />} />
                 <Route path="/events" element={<Events />} />
                 <Route path="/login" element={<Login />} />
                 <Route path="/signup" element={<Signup />} />

@@ -1,28 +1,47 @@
 import { Header } from "@/components/Header";
-import { HeroSection } from "@/components/HeroSection";
 import { SearchSection } from "@/components/SearchSection";
+import { StorySection } from "@/components/StorySection";
 import { CategoryGrid } from "@/components/CategoryGrid";
-import { RecommendationSection } from "@/components/RecommendationSection";
 import { LiveNewsSection } from "@/components/LiveNewsSection";
-import { LiveVenueSection } from "@/components/LiveVenueSection";
-import { PopularDestinations } from "@/components/PopularDestinations";
-import { FeaturesSection } from "@/components/FeaturesSection";
+import { TrafficAlert } from "@/components/TrafficAlert";
+import { VibeCheck } from "@/components/VibeCheck";
+import { TrendingVenues } from "@/components/TrendingVenues";
 import { BottomNavigation } from "@/components/BottomNavigation";
 
 const Index = () => {
+  const getCurrentTimeGreeting = () => {
+    const hour = new Date().getHours();
+    const day = new Date().toLocaleDateString('en-US', { weekday: 'long' }).toUpperCase();
+
+    if (hour < 12) return `${day} MORNING`;
+    if (hour < 17) return `${day} AFTERNOON`;
+    if (hour < 21) return `${day} EVENING`;
+    return `${day} NIGHT`;
+  };
+
   return (
-    <div className="min-h-screen bg-background pb-16 md:pb-0">
+    <div className="min-h-screen bg-background pb-16 md:pb-0 dark">
       <Header />
-      <main>
-        <HeroSection />
+
+      <main className="pt-16">
+        {/* Time-based Greeting */}
+        <div className="bg-background px-4 pt-6 pb-4">
+          <div className="container mx-auto max-w-6xl">
+            <p className="text-sm text-muted-foreground tracking-wider font-medium">
+              {getCurrentTimeGreeting()}
+            </p>
+          </div>
+        </div>
+
         <SearchSection />
+        <StorySection />
         <CategoryGrid />
         <LiveNewsSection />
-        <LiveVenueSection />
-        <RecommendationSection />
-        <PopularDestinations />
-        <FeaturesSection />
+        <TrafficAlert />
+        <VibeCheck />
+        <TrendingVenues />
       </main>
+
       <BottomNavigation />
     </div>
   );
