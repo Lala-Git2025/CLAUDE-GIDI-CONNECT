@@ -21,8 +21,12 @@ import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import * as cheerio from 'cheerio';
+import puppeteer from 'puppeteer-extra';
+import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
 dotenv.config();
+
+puppeteer.use(StealthPlugin());
 
 // --- CONFIGURATION ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -46,6 +50,71 @@ const supabase = SUPABASE_SERVICE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_KEY)
   : null;
 
+// --- FETCH HELPERS (axios with headers + puppeteer fallback) ---
+const DEFAULT_HEADERS = {
+  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8',
+  'Accept-Language': 'en-US,en;q=0.9',
+  'Upgrade-Insecure-Requests': '1'
+};
+
+async function fetchWithAxios(url) {
+  const resp = await axios.get(url, {
+    headers: DEFAULT_HEADERS,
+    timeout: 20000,
+    maxRedirects: 5,
+  });
+  return resp.data;
+}
+
+async function fetchWithPuppeteer(url) {
+  console.log(`   🔁 Falling back to headless browser for ${url}`);
+  const browser = await puppeteer.launch({
+    args: ['--no-sandbox', '--disable-setuid-sandbox'],
+    headless: true
+  });
+  try {
+    const page = await browser.newPage();
+    await page.setUserAgent(DEFAULT_HEADERS['User-Agent']);
+    await page.setExtraHTTPHeaders({ 'Accept-Language': DEFAULT_HEADERS['Accept-Language'] });
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+    await page.waitForTimeout(1000);
+    const html = await page.content();
+    await page.close();
+    return html;
+  } finally {
+    await browser.close();
+  }
+}
+
+async function fetchPageHtml(url, attempts = 3) {
+  let lastErr = null;
+  for (let i = 0; i < attempts; i++) {
+    try {
+      return await fetchWithAxios(url);
+    } catch (err) {
+      lastErr = err;
+      const status = err?.response?.status;
+      const msg = err?.message || '...';
+      console.log(`   ⚠️ Axios fetch failed (attempt ${i + 1}): ${status || msg}`);
+
+      // If blocked, try puppeteer fallback
+      if (status === 403 || status === 429 || /blocked|bot/i.test(msg)) {
+        try {
+          return await fetchWithPuppeteer(url);
+        } catch (puppErr) {
+          console.log('   ❌ Headless fallback failed:', puppErr.message);
+          // continue to retry axios in case of transient issue
+        }
+      }
+
+      // exponential backoff before retrying
+      await new Promise(res => setTimeout(res, 500 * Math.pow(2, i)));
+    }
+  }
+  throw lastErr;
+}
+
 // --- FUNCTIONS ---
 
 /**
@@ -55,14 +124,8 @@ async function scrapeArticleDetails(articleUrl) {
   try {
     console.log(`   🔍 Scraping article from: ${articleUrl.substring(0, 50)}...`);
 
-    const response = await axios.get(articleUrl, {
-      timeout: 10000,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-      }
-    });
-
-    const $ = cheerio.load(response.data);
+    const html = await fetchPageHtml(articleUrl);
+    const $ = cheerio.load(html);
 
     // --- EXTRACT IMAGE ---
     let imageUrl = null;
@@ -315,14 +378,8 @@ async function scrapeRealLagosNews() {
     try {
       console.log(`🔍 Scraping ${source.name}...`);
 
-      const response = await axios.get(source.url, {
-        timeout: 15000,
-        headers: {
-          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        }
-      });
-
-      const $ = cheerio.load(response.data);
+      const html = await fetchPageHtml(source.url);
+      const $ = cheerio.load(html);
 
       // Find article links - try multiple selectors
       const articleLinks = [];
@@ -491,7 +548,8 @@ async function runLagosNewsAgent() {
     console.log(`\n✅ Successfully scraped ${newsItems.length} articles with real images\n`);
 
     if (newsItems.length === 0) {
-      throw new Error('No articles were successfully scraped. Check your internet connection or the news site structures may have changed.');
+      console.warn('⚠️ No articles were scraped this run. Skipping Supabase upload.');
+      process.exit(0);
     }
 
     // Step 2: Upload to Supabase
