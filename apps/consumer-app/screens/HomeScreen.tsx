@@ -278,10 +278,7 @@ export default function HomeScreen() {
           </ScrollView>
         </View>
 
-        {/* Traffic Update - Dynamic */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>🚦 Live Traffic Update</Text>
-        </View>
+        {/* Traffic Update - Dynamic (header is inside TrafficAlert component) */}
         <TrafficAlert />
 
         {/* Vibe Check Section - Dynamic */}
