@@ -38,7 +38,10 @@ jobs:
             libasound2
 
       - name: Install dependencies
-        run: npm ci
+        run: npm install
+
+      - name: Verify puppeteer-extra installed
+        run: node -e "require.resolve('puppeteer-extra'); console.log('puppeteer-extra found')"
 
       - name: Run Lagos News Agent
         run: node scripts/lagos-news-agent.js
