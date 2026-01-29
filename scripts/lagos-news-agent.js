@@ -21,12 +21,24 @@ import axios from 'axios';
 import { createClient } from '@supabase/supabase-js';
 import dotenv from 'dotenv';
 import * as cheerio from 'cheerio';
-import puppeteer from 'puppeteer-extra';
-import StealthPlugin from 'puppeteer-extra-plugin-stealth';
 
 dotenv.config();
 
-puppeteer.use(StealthPlugin());
+// Optional headless browsing (puppeteer-extra). We dynamically import so CI can run without these deps if they're not installed.
+let puppeteer = null;
+let StealthPlugin = null;
+try {
+  const pExtra = await import('puppeteer-extra');
+  puppeteer = pExtra.default || pExtra;
+  const stealthMod = await import('puppeteer-extra-plugin-stealth');
+  StealthPlugin = stealthMod.default || stealthMod;
+  if (puppeteer && StealthPlugin) {
+    puppeteer.use(StealthPlugin());
+  }
+} catch (err) {
+  console.warn('⚠️ Optional dependency "puppeteer-extra" not found — headless fallback disabled. Install puppeteer, puppeteer-extra and puppeteer-extra-plugin-stealth to enable headless browser fallback.');
+  puppeteer = null;
+}
 
 // --- CONFIGURATION ---
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
@@ -68,6 +80,10 @@ async function fetchWithAxios(url) {
 }
 
 async function fetchWithPuppeteer(url) {
+  if (!puppeteer) {
+    throw new Error('puppeteer not available');
+  }
+
   console.log(`   🔁 Falling back to headless browser for ${url}`);
   const browser = await puppeteer.launch({
     args: ['--no-sandbox', '--disable-setuid-sandbox'],
